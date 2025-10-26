@@ -1,11 +1,10 @@
 """
-Модуль управления базой данных для Creative Items Bot
-Thread-safe реализация с SQLite
+Модуль управления базой данных
 """
 import sqlite3
 import json
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Tuple
+from typing import List, Dict, Tuple
 from contextlib import contextmanager
 import threading
 
@@ -36,7 +35,6 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Таблица пользователей
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -50,7 +48,6 @@ class DatabaseManager:
                 )
             """)
             
-            # Таблица предметов пользователей
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +60,6 @@ class DatabaseManager:
                 )
             """)
             
-            # Таблица сгенерированных идей
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS generated_ideas (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,7 +72,6 @@ class DatabaseManager:
                 )
             """)
             
-            # Таблица истории действий (для антиспама)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_actions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,16 +80,6 @@ class DatabaseManager:
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
-            """)
-            
-            # Индексы для производительности
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_user_items_user 
-                ON user_items(user_id) WHERE is_deleted = 0
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_actions_user_time 
-                ON user_actions(user_id, timestamp)
             """)
             
             conn.commit()
@@ -118,15 +103,13 @@ class DatabaseManager:
         """Добавление предмета пользователю"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
-            # Проверяем лимит предметов
             cursor.execute("""
                 SELECT COUNT(*) FROM user_items 
                 WHERE user_id = ? AND is_deleted = 0
             """, (user_id,))
             count = cursor.fetchone()
             
-            if count >= 20:  # MAX_ITEMS_PER_USER
+            if count >= 20:
                 return False
             
             cursor.execute("""
@@ -147,7 +130,7 @@ class DatabaseManager:
             return [row for row in cursor.fetchall()]
     
     def delete_item(self, user_id: int, item_name: str) -> bool:
-        """Удаление предмета (мягкое удаление)"""
+        """Удаление предмета"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -167,8 +150,7 @@ class DatabaseManager:
                 WHERE user_id = ? AND is_deleted = 0
             """, (user_id,))
     
-    def save_generated_ideas(self, user_id: int, items: List[str], 
-                           ideas: Dict) -> int:
+    def save_generated_ideas(self, user_id: int, items: List[str], ideas: Dict) -> int:
         """Сохранение сгенерированных идей"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -181,7 +163,7 @@ class DatabaseManager:
     
     def check_rate_limit(self, user_id: int, window_seconds: int = 60, 
                         max_actions: int = 10) -> Tuple[bool, int]:
-        """Проверка лимита запросов (антиспам)"""
+        """Проверка лимита запросов"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cutoff_time = datetime.now() - timedelta(seconds=window_seconds)
@@ -208,20 +190,17 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Общее количество запросов
             cursor.execute("""
                 SELECT COUNT(*) FROM generated_ideas WHERE user_id = ?
             """, (user_id,))
             total_requests = cursor.fetchone()
             
-            # Количество активных предметов
             cursor.execute("""
                 SELECT COUNT(*) FROM user_items 
                 WHERE user_id = ? AND is_deleted = 0
             """, (user_id,))
             items_count = cursor.fetchone()
             
-            # Дата регистрации
             cursor.execute("""
                 SELECT created_at FROM users WHERE user_id = ?
             """, (user_id,))
