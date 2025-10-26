@@ -107,8 +107,8 @@ class DatabaseManager:
                 SELECT COUNT(*) FROM user_items 
                 WHERE user_id = ? AND is_deleted = 0
             """, (user_id,))
-            count = cursor.fetchone()
-            
+            row = cursor.fetchone()
+            count = row[0] if row else 0
             if count >= 20:
                 return False
             
@@ -127,7 +127,7 @@ class DatabaseManager:
                 WHERE user_id = ? AND is_deleted = 0
                 ORDER BY added_at DESC
             """, (user_id,))
-            return [row for row in cursor.fetchall()]
+        return [row[0] for row in cursor.fetchall()]
     
     def delete_item(self, user_id: int, item_name: str) -> bool:
         """Удаление предмета"""
@@ -173,7 +173,7 @@ class DatabaseManager:
                 WHERE user_id = ? AND timestamp > ?
             """, (user_id, cutoff_time))
             
-            count = cursor.fetchone()
+            count = cursor.fetchone()[0]
             remaining = max(0, max_actions - count)
             
             if count < max_actions:
