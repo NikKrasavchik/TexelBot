@@ -1,8 +1,8 @@
 """
-Основной модуль Creative Items Telegram Bot
+Texel Try-On Telegram Bot
 """
 import logging
-import re
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
@@ -10,368 +10,278 @@ from telegram.ext import (
 )
 from config import config
 from database import DatabaseManager
-from ai_engine import AIEngine
+from tryon_engine import TryOnEngine
 
-# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация компонентов
+# Инициализация
 db = DatabaseManager(config.DATABASE_NAME)
-ai_engine = AIEngine()
+tryon_engine = TryOnEngine(config.RAPIDAPI_KEY)
+
+# Создаём папку для временных файлов
+os.makedirs(config.TEMP_DIR, exist_ok=True)
 
 
-class CreativeBot:
+class TexelBot:
     """Основной класс бота"""
     
     def __init__(self):
         self.db = db
-        self.ai = ai_engine
-        
+        self.tryon = tryon_engine
+    
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
+        """Команда /start"""
         user = update.effective_user
         self.db.add_or_update_user(
             user.id, user.username, user.first_name, user.last_name
         )
         
         welcome_text = (
-            f"🎨 Привет, {user.first_name}!\n\n"
-            "Я — Creative Items Bot 🤖✨\n\n"
+            f"👋 Привет, {user.first_name}!\n\n"
+            "Я — **Texel Try-On Bot** 🤖👔\n\n"
             "🔮 Что я умею:\n"
-            "• Принимаю список вещей\n"
-            "• Генерирую креативные идеи проектов\n"
-            "• Предлагаю DIY-решения любой сложности\n\n"
-            "📦 Как пользоваться:\n"
-            "1️⃣ Отправь мне предметы (каждый с новой строки или через запятую)\n"
-            "2️⃣ Нажми кнопку 'Сгенерировать идеи'\n"
-            "3️⃣ Получи крутые варианты проектов!\n\n"
-            "💡 Пример:\n"
-            "молоток\n"
-            "гвозди\n"
-            "доски\n"
-            "краска\n\n"
+            "• Виртуальная примерка одежды\n"
+            "• AI-генерация образов\n"
+            "• Мгновенный результат\n\n"
+            "📸 Как использовать:\n"
+            "1️⃣ Нажми /tryon\n"
+            "2️⃣ Отправь фото человека\n"
+            "3️⃣ Отправь фото одежды\n"
+            "4️⃣ Получи результат!\n\n"
             "Попробуй прямо сейчас! 👇"
         )
         
         keyboard = [
-            [InlineKeyboardButton("📚 Инструкция", callback_data="help")],
-            [InlineKeyboardButton("📊 Моя статистика", callback_data="stats")]
+            [InlineKeyboardButton("👔 Начать примерку", callback_data="start_tryon")],
+            [InlineKeyboardButton("📊 Моя статистика", callback_data="stats")],
+            [InlineKeyboardButton("ℹ️ Помощь", callback_data="help")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
             welcome_text,
+            parse_mode='Markdown',
             reply_markup=reply_markup
         )
     
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /help"""
-        help_text = (
-            "📚 Инструкция\n\n"
-            "Команды:\n"
-            "/start - Начать работу\n"
-            "/help - Эта инструкция\n"
-            "/myitems - Показать мои предметы\n"
-            "/clear - Очистить список предметов\n"
-            "/stats - Моя статистика\n\n"
-            "Как добавить предметы:\n"
-            "Просто отправь сообщение с предметами:\n"
-            "• Каждый предмет с новой строки\n"
-            "• Или через запятую\n\n"
-            "Лимиты:\n"
-            "• Максимум 20 предметов\n"
-            "• Минимум 2 предмета для генерации\n"
-            "• До 10 запросов в минуту"
-        )
-        await update.message.reply_text(help_text)
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка текстовых сообщений с предметами"""
+    async def tryon_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда /tryon"""
         user_id = update.effective_user.id
-        text = update.message.text.strip()
         
-        items = self._parse_items(text)
-        
-        if not items:
-            await update.message.reply_text(
-                "❌ Не могу распознать предметы. Попробуй снова!\n"
-                "Пример: молоток, гвозди, доски"
-            )
-            return
-        
-        added_count = 0
-        for item in items:
-            if self.db.add_item(user_id, item):
-                added_count += 1
-        
-        current_items = self.db.get_user_items(user_id)
-        
-        response = f"✅ Добавлено предметов: {added_count}\n\n"
-        response += f"📦 Всего предметов: {len(current_items)}\n\n"
-        response += "Твой список:\n" + "\n".join(f"• {item}" for item in current_items[:10])
-        
-        if len(current_items) > 10:
-            response += f"\n... и ещё {len(current_items) - 10}"
-        
-        keyboard = []
-        if len(current_items) >= config.MIN_ITEMS_FOR_IDEAS:
-            keyboard.append([
-                InlineKeyboardButton("🚀 Сгенерировать идеи", callback_data="generate")
-            ])
-        keyboard.append([
-            InlineKeyboardButton("📋 Все предметы", callback_data="show_all"),
-            InlineKeyboardButton("🗑️ Очистить", callback_data="clear_confirm")
-        ])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(response, reply_markup=reply_markup)
-    
-    def _parse_items(self, text: str):
-        """Парсинг предметов из текста"""
-        separators = [',', '\n', ';', '•', '-']
-        items = [text]
-        
-        for sep in separators:
-            new_items = []
-            for item in items:
-                new_items.extend(item.split(sep))
-            items = new_items
-        
-        cleaned = []
-        for item in items:
-            item = item.strip().lower()
-            item = re.sub(r'^\d+\.?\s*', '', item)
-            if item and len(item) > 1:
-                cleaned.append(item)
-        
-        return list(dict.fromkeys(cleaned))
-    
-    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик нажатий на inline-кнопки"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        data = query.data
-        
-        if data == "generate":
-            await self._handle_generate(query, user_id)
-        elif data == "show_all":
-            await self._handle_show_all(query, user_id)
-        elif data == "clear_confirm":
-            await self._handle_clear_confirm(query)
-        elif data == "clear_yes":
-            await self._handle_clear_execute(query, user_id)
-        elif data == "clear_no":
-            await query.edit_message_text("Отменено ✅")
-        elif data == "stats":
-            await self._handle_stats(query, user_id)
-        elif data == "help":
-            await self._handle_help_callback(query)
-        elif data.startswith("delete_"):
-            item = data.replace("delete_", "")
-            await self._handle_delete_item(query, user_id, item)
-    
-    async def _handle_generate(self, query, user_id: int):
-        """Генерация идей"""
+        # Проверка лимита
         allowed, remaining = self.db.check_rate_limit(
             user_id, 
-            window_seconds=60, 
-            max_actions=config.MAX_REQUESTS_PER_MINUTE
+            window_hours=24, 
+            max_actions=config.MAX_REQUESTS_PER_DAY
         )
         
         if not allowed:
-            await query.edit_message_text(
-                "⚠️ Превышен лимит запросов!\n\n"
-                "Подожди минутку перед следующей генерацией 🕐"
-            )
-            return
-        
-        items = self.db.get_user_items(user_id)
-        
-        if len(items) < config.MIN_ITEMS_FOR_IDEAS:
-            await query.edit_message_text(
-                f"❌ Нужно минимум {config.MIN_ITEMS_FOR_IDEAS} предмета для генерации идей!\n"
-                f"У тебя сейчас: {len(items)}"
-            )
-            return
-        
-        await query.edit_message_text(
-            "🔮 Генерирую идеи...\n\n"
-            f"Предметы: {', '.join(items[:5])}{'...' if len(items) > 5 else ''}\n"
-            "⏳ Это займёт 5-15 секунд..."
-        )
-        
-        result = self.ai.generate_creative_ideas(items, count=min(config.MAX_IDEAS_PER_REQUEST, 5))
-        
-        if result["success"]:
-            ideas_text = result["ideas"]
-            self.db.save_generated_ideas(user_id, items, result)
-            
-            response = f"✨ Креативные идеи для твоих предметов! ✨\n\n{ideas_text}\n\n"
-            response += f"📦 Использовано предметов: {len(items)}\n\n"
-            response += "💡 Понравились идеи? Попробуй добавить больше предметов!"
-        else:
-            response = "❌ Произошла ошибка генерации\n\n"
-            if "fallback_ideas" in result:
-                response += "Вот несколько базовых идей:\n\n" + result["fallback_ideas"]
-            else:
-                response += f"Ошибка: {result.get('error', 'Неизвестная ошибка')}"
-        
-        keyboard = [
-            [InlineKeyboardButton("🔄 Ещё идеи", callback_data="generate")],
-            [InlineKeyboardButton("📋 Мои предметы", callback_data="show_all")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if len(response) > 4000:
-            parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
-            for i, part in enumerate(parts):
-                if i == 0:
-                    await query.edit_message_text(part)
-                else:
-                    await query.message.reply_text(
-                        part,
-                        reply_markup=reply_markup if i == len(parts)-1 else None
-                    )
-        else:
-            await query.edit_message_text(response, reply_markup=reply_markup)
-    
-    async def _handle_show_all(self, query, user_id: int):
-        """Показать все предметы"""
-        items = self.db.get_user_items(user_id)
-        
-        if not items:
-            await query.edit_message_text("📦 Список предметов пуст!")
-            return
-        
-        response = f"📦 Твои предметы ({len(items)}):\n\n"
-        
-        keyboard = []
-        for item in items[:15]:
-            keyboard.append([
-                InlineKeyboardButton(f"❌ {item}", callback_data=f"delete_{item}")
-            ])
-        
-        keyboard.append([
-            InlineKeyboardButton("🚀 Генерировать", callback_data="generate"),
-            InlineKeyboardButton("🗑️ Очистить всё", callback_data="clear_confirm")
-        ])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            response + "Нажми на предмет, чтобы удалить его",
-            reply_markup=reply_markup
-        )
-    
-    async def _handle_clear_confirm(self, query):
-        """Подтверждение очистки"""
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Да, очистить", callback_data="clear_yes"),
-                InlineKeyboardButton("❌ Нет", callback_data="clear_no")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "⚠️ Точно удалить все предметы?\n\nЭто действие нельзя отменить!",
-            reply_markup=reply_markup
-        )
-    
-    async def _handle_clear_execute(self, query, user_id: int):
-        """Выполнение очистки"""
-        self.db.clear_items(user_id)
-        await query.edit_message_text(
-            "✅ Все предметы удалены!\n\nМожешь добавить новые 📦"
-        )
-    
-    async def _handle_delete_item(self, query, user_id: int, item: str):
-        """Удаление конкретного предмета"""
-        if self.db.delete_item(user_id, item):
-            await query.answer(f"✅ Удалено: {item}")
-            await self._handle_show_all(query, user_id)
-        else:
-            await query.answer("❌ Ошибка удаления")
-    
-    async def _handle_stats(self, query, user_id: int):
-        """Показать статистику пользователя"""
-        stats = self.db.get_user_stats(user_id)
-        
-        response = (
-            "📊 Твоя статистика\n\n"
-            f"🎯 Всего запросов: {stats['total_requests']}\n"
-            f"📦 Активных предметов: {stats['items_count']}\n"
-            f"📅 Дата регистрации: {stats['member_since'][:10]}\n\n"
-            "💡 Продолжай экспериментировать!"
-        )
-        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="help")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(response, reply_markup=reply_markup)
-    
-    async def _handle_help_callback(self, query):
-        """Помощь через callback"""
-        help_text = (
-            "📚 Быстрая справка\n\n"
-            "Как пользоваться:\n"
-            "1️⃣ Отправь предметы\n"
-            "2️⃣ Нажми 'Генерировать'\n"
-            "3️⃣ Получи идеи!\n\n"
-            "Команды:\n"
-            "/start /help /myitems /clear /stats\n\n"
-            "💡 Больше предметов = больше идей!"
-        )
-        keyboard = [
-            [InlineKeyboardButton("📊 Статистика", callback_data="stats")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(help_text, reply_markup=reply_markup)
-    
-    async def myitems_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда /myitems"""
-        user_id = update.effective_user.id
-        items = self.db.get_user_items(user_id)
-        
-        if not items:
             await update.message.reply_text(
-                "📦 У тебя пока нет предметов!\n\n"
-                "Отправь мне список предметов, чтобы начать 🚀"
+                "⚠️ Превышен дневной лимит!\n\n"
+                "Попробуй завтра 🕐"
             )
             return
         
-        response = f"📦 Твои предметы ({len(items)}):\n\n"
-        response += "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
+        help_text = (
+            "👔 **Виртуальная примерка**\n\n"
+            "📸 Шаг 1: Отправь фото человека\n"
+            "• В полный рост\n"
+            "• Чёткое изображение\n"
+            "• Хорошее освещение\n\n"
+            f"💫 Осталось попыток сегодня: {remaining}"
+        )
+        
+        context.user_data['awaiting_person_photo'] = True
         
         keyboard = [
-            [InlineKeyboardButton("🚀 Генерировать идеи", callback_data="generate")],
-            [InlineKeyboardButton("🗑️ Очистить", callback_data="clear_confirm")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(response, reply_markup=reply_markup)
-    
-    async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда /clear"""
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Да", callback_data="clear_yes"),
-                InlineKeyboardButton("❌ Нет", callback_data="clear_no")
-            ]
+            [InlineKeyboardButton("❌ Отменить", callback_data="cancel_tryon")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            "⚠️ Удалить все предметы?",
+            help_text,
+            parse_mode='Markdown',
             reply_markup=reply_markup
         )
+    
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка фотографий"""
+        user_id = update.effective_user.id
+        photo = update.message.photo[-1]
+        
+        file = await photo.get_file()
+        
+        if context.user_data.get('awaiting_person_photo'):
+            file_path = os.path.join(config.TEMP_DIR, f"person_{user_id}.jpg")
+            await file.download_to_drive(file_path)
+            
+            context.user_data['person_photo_path'] = file_path
+            context.user_data['person_photo_id'] = photo.file_id
+            context.user_data['awaiting_person_photo'] = False
+            context.user_data['awaiting_garment_photo'] = True
+            
+            keyboard = [
+                [InlineKeyboardButton("❌ Отменить", callback_data="cancel_tryon")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                "✅ Фото человека получено!\n\n"
+                "📸 Шаг 2: Отправь фото одежды 👕\n"
+                "• Одежда на однотонном фоне\n"
+                "• Чёткое изображение",
+                reply_markup=reply_markup
+            )
+        
+        elif context.user_data.get('awaiting_garment_photo'):
+            file_path = os.path.join(config.TEMP_DIR, f"garment_{user_id}.jpg")
+            await file.download_to_drive(file_path)
+            
+            context.user_data['garment_photo_path'] = file_path
+            context.user_data['garment_photo_id'] = photo.file_id
+            context.user_data['awaiting_garment_photo'] = False
+            
+            await update.message.reply_text(
+                "🔮 **Генерирую примерку...**\n\n"
+                "⏳ Это займёт 30-90 секунд\n"
+                "Пожалуйста, подожди...",
+                parse_mode='Markdown'
+            )
+            
+            # Генерация через Texel API
+            result = self.tryon.generate_tryon(
+                person_image_path=context.user_data['person_photo_path'],
+                garment_image_path=context.user_data['garment_photo_path'],
+                category="upper_body"
+            )
+            
+            if result["success"]:
+                with open(result["output_path"], 'rb') as photo_file:
+                    await update.message.reply_photo(
+                        photo=photo_file,
+                        caption=(
+                            "✨ **Вот результат!**\n\n"
+                            "Как тебе образ? 😊\n\n"
+                            "Хочешь примерить ещё? /tryon"
+                        ),
+                        parse_mode='Markdown'
+                    )
+                
+                # Сохраняем в БД
+                self.db.save_tryon(
+                    user_id,
+                    context.user_data['person_photo_id'],
+                    context.user_data['garment_photo_id'],
+                    "upper_body",
+                    success=True
+                )
+                
+                # Удаляем временные файлы
+                os.remove(context.user_data['person_photo_path'])
+                os.remove(context.user_data['garment_photo_path'])
+                os.remove(result["output_path"])
+            else:
+                await update.message.reply_text(
+                    f"❌ **Ошибка генерации**\n\n"
+                    f"Причина: {result.get('error', 'Неизвестная ошибка')}\n\n"
+                    f"Попробуй:\n"
+                    f"• Другие фото\n"
+                    f"• Лучшее качество\n"
+                    f"• /tryon снова",
+                    parse_mode='Markdown'
+                )
+                
+                self.db.save_tryon(
+                    user_id,
+                    context.user_data['person_photo_id'],
+                    context.user_data['garment_photo_id'],
+                    "upper_body",
+                    success=False
+                )
+            
+            context.user_data.clear()
+        else:
+            await update.message.reply_text(
+                "📸 Сначала начни примерку командой /tryon"
+            )
+    
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка кнопок"""
+        query = update.callback_query
+        await query.answer()
+        
+        data = query.data
+        user_id = query.from_user.id
+        
+        if data == "start_tryon":
+            context.user_data['awaiting_person_photo'] = True
+            
+            keyboard = [
+                [InlineKeyboardButton("❌ Отменить", callback_data="cancel_tryon")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                "👔 **Виртуальная примерка**\n\n"
+                "📸 Отправь фото человека (в полный рост)",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        
+        elif data == "cancel_tryon":
+            context.user_data.clear()
+            await query.edit_message_text("❌ Примерка отменена\n\nДля новой попытки: /tryon")
+        
+        elif data == "stats":
+            stats = self.db.get_user_stats(user_id)
+            
+            response = (
+                "📊 **Твоя статистика**\n\n"
+                f"👤 Пользователь: {query.from_user.first_name}\n"
+                f"👔 Всего примерок: {stats['total_tryons']}\n"
+                f"📅 С нами с: {stats['member_since'][:10] if stats['member_since'] else 'сегодня'}\n\n"
+                "🔥 Продолжай экспериментировать!"
+            )
+            
+            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_start")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                response,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        
+        elif data == "help":
+            help_text = (
+                "ℹ️ **Помощь**\n\n"
+                "**Команды:**\n"
+                "/start - Главное меню\n"
+                "/tryon - Начать примерку\n"
+                "/stats - Статистика\n\n"
+                "**Советы:**\n"
+                "• Используй чёткие фото\n"
+                "• Хорошее освещение\n"
+                "• Одежда на однотонном фоне\n\n"
+                "**Лимиты:**\n"
+                f"• {config.MAX_REQUESTS_PER_DAY} примерок в день"
+            )
+            
+            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_start")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                help_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        
+        elif data == "back_to_start":
+            await self.start_command(query, context)
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /stats"""
@@ -379,25 +289,22 @@ class CreativeBot:
         stats = self.db.get_user_stats(user_id)
         
         response = (
-            "📊 Твоя статистика\n\n"
-            f"👤 Пользователь: {update.effective_user.first_name}\n"
-            f"🎯 Всего генераций: {stats['total_requests']}\n"
-            f"📦 Активных предметов: {stats['items_count']}/{config.MAX_ITEMS_PER_USER}\n"
-            f"📅 С нами с: {stats['member_since'][:10]}\n\n"
+            "📊 **Твоя статистика**\n\n"
+            f"👤 {update.effective_user.first_name}\n"
+            f"👔 Всего примерок: {stats['total_tryons']}\n"
+            f"📅 С нами с: {stats['member_since'][:10] if stats['member_since'] else 'сегодня'}"
         )
-        response += "🔥 Отличная активность!" if stats['total_requests'] > 10 else "💡 Попробуй ещё!"
         
-        await update.message.reply_text(response)
+        await update.message.reply_text(response, parse_mode='Markdown')
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик ошибок"""
-        logger.error(f"Exception while handling update: {context.error}")
+        logger.error(f"Exception: {context.error}")
         
         try:
             if update and update.effective_message:
                 await update.effective_message.reply_text(
-                    "❌ Произошла ошибка!\n\n"
-                    "Попробуй ещё раз или свяжись с поддержкой."
+                    "❌ Произошла ошибка!\n\nПопробуй ещё раз или /start"
                 )
         except Exception as e:
             logger.error(f"Error in error handler: {e}")
@@ -406,29 +313,25 @@ class CreativeBot:
 def main():
     """Запуск бота"""
     if config.TELEGRAM_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("❌ ОШИБКА: Установите TELEGRAM_TOKEN в .env файле!")
+        print("❌ ОШИБКА: Установите TELEGRAM_TOKEN в .env!")
         return
     
-    print("🤖 Запуск Creative Items Bot...")
+    if config.RAPIDAPI_KEY == "YOUR_RAPIDAPI_KEY_HERE":
+        print("❌ ОШИБКА: Установите RAPIDAPI_KEY в .env!")
+        return
+    
+    print("🤖 Запуск Texel Try-On Bot...")
     print(f"📊 База данных: {config.DATABASE_NAME}")
-    print(f"🧠 AI модель: {config.AI_MODEL}")
-    print(f"🔗 AI URL: {config.AI_BASE_URL}")
     
     application = Application.builder().token(config.TELEGRAM_TOKEN).build()
     
-    bot = CreativeBot()
+    bot = TexelBot()
     
-    # Регистрация обработчиков
     application.add_handler(CommandHandler("start", bot.start_command))
-    application.add_handler(CommandHandler("help", bot.help_command))
-    application.add_handler(CommandHandler("myitems", bot.myitems_command))
-    application.add_handler(CommandHandler("clear", bot.clear_command))
+    application.add_handler(CommandHandler("tryon", bot.tryon_command))
     application.add_handler(CommandHandler("stats", bot.stats_command))
     application.add_handler(CallbackQueryHandler(bot.button_callback))
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND, 
-        bot.handle_message
-    ))
+    application.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo))
     application.add_error_handler(bot.error_handler)
     
     print("✅ Бот запущен! Нажми Ctrl+C для остановки.")

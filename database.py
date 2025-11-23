@@ -2,16 +2,15 @@
 Модуль управления базой данных
 """
 import sqlite3
-import json
 from datetime import datetime, timedelta
-from typing import List, Dict, Tuple
+from typing import Dict, Tuple
 from contextlib import contextmanager
 import threading
 
 class DatabaseManager:
-    """Менеджер базы данных с поддержкой многопоточности"""
+    """Менеджер базы данных"""
     
-    def __init__(self, db_name: str = "creative_bot.db"):
+    def __init__(self, db_name: str = "texel_bot.db"):
         self.db_name = db_name
         self.local = threading.local()
         self.setup()
@@ -43,31 +42,20 @@ class DatabaseManager:
                     last_name TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    total_requests INTEGER DEFAULT 0,
+                    total_tryons INTEGER DEFAULT 0,
                     is_blocked BOOLEAN DEFAULT 0
                 )
             """)
             
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_items (
+                CREATE TABLE IF NOT EXISTS tryons (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
-                    item_name TEXT NOT NULL,
+                    person_photo_id TEXT,
+                    garment_photo_id TEXT,
                     category TEXT,
-                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_deleted BOOLEAN DEFAULT 0,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS generated_ideas (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    items_used TEXT NOT NULL,
-                    ideas_json TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    rating INTEGER,
+                    success BOOLEAN DEFAULT 1,
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
             """)
@@ -99,87 +87,40 @@ class DatabaseManager:
                     last_activity = CURRENT_TIMESTAMP
             """, (user_id, username, first_name, last_name))
     
-    def add_item(self, user_id: int, item_name: str, category: str = None) -> bool:
-        """Добавление предмета пользователю"""
+    def save_tryon(self, user_id: int, person_photo_id: str, 
+                   garment_photo_id: str, category: str, success: bool = True):
+        """Сохранение примерки"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT COUNT(*) FROM user_items 
-                WHERE user_id = ? AND is_deleted = 0
-            """, (user_id,))
-            row = cursor.fetchone()
-            count = row[0] if row else 0
-            if count >= 20:
-                return False
+                INSERT INTO tryons (user_id, person_photo_id, garment_photo_id, category, success)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, person_photo_id, garment_photo_id, category, success))
             
             cursor.execute("""
-                INSERT INTO user_items (user_id, item_name, category)
-                VALUES (?, ?, ?)
-            """, (user_id, item_name.lower().strip(), category))
-            return True
-    
-    def get_user_items(self, user_id: int) -> List[str]:
-        """Получение всех предметов пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT item_name FROM user_items
-                WHERE user_id = ? AND is_deleted = 0
-                ORDER BY added_at DESC
-            """, (user_id,))
-        return [row[0] for row in cursor.fetchall()]
-    
-    def delete_item(self, user_id: int, item_name: str) -> bool:
-        """Удаление предмета"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE user_items 
-                SET is_deleted = 1
-                WHERE user_id = ? AND item_name = ? AND is_deleted = 0
-            """, (user_id, item_name.lower().strip()))
-            return cursor.rowcount > 0
-    
-    def clear_items(self, user_id: int):
-        """Очистка всех предметов пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE user_items 
-                SET is_deleted = 1
-                WHERE user_id = ? AND is_deleted = 0
+                UPDATE users SET total_tryons = total_tryons + 1
+                WHERE user_id = ?
             """, (user_id,))
     
-    def save_generated_ideas(self, user_id: int, items: List[str], ideas: Dict) -> int:
-        """Сохранение сгенерированных идей"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO generated_ideas (user_id, items_used, ideas_json)
-                VALUES (?, ?, ?)
-            """, (user_id, json.dumps(items, ensure_ascii=False), 
-                  json.dumps(ideas, ensure_ascii=False)))
-            return cursor.lastrowid
-    
-    def check_rate_limit(self, user_id: int, window_seconds: int = 60, 
-                        max_actions: int = 10) -> Tuple[bool, int]:
+    def check_rate_limit(self, user_id: int, window_hours: int = 24, 
+                        max_actions: int = 50) -> Tuple[bool, int]:
         """Проверка лимита запросов"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cutoff_time = datetime.now() - timedelta(seconds=window_seconds)
+            cutoff_time = datetime.now() - timedelta(hours=window_hours)
             
             cursor.execute("""
                 SELECT COUNT(*) FROM user_actions
                 WHERE user_id = ? AND timestamp > ?
             """, (user_id, cutoff_time))
             
-            count = cursor.fetchone()[0]
+            count = cursor.fetchone()
             remaining = max(0, max_actions - count)
             
             if count < max_actions:
                 cursor.execute("""
                     INSERT INTO user_actions (user_id, action_type)
-                    VALUES (?, 'generate_ideas')
+                    VALUES (?, 'tryon_request')
                 """, (user_id,))
                 return True, remaining
             
@@ -191,23 +132,13 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT COUNT(*) FROM generated_ideas WHERE user_id = ?
+                SELECT total_tryons, created_at FROM users WHERE user_id = ?
             """, (user_id,))
-            total_requests = cursor.fetchone()
             
-            cursor.execute("""
-                SELECT COUNT(*) FROM user_items 
-                WHERE user_id = ? AND is_deleted = 0
-            """, (user_id,))
-            items_count = cursor.fetchone()
-            
-            cursor.execute("""
-                SELECT created_at FROM users WHERE user_id = ?
-            """, (user_id,))
-            created_at = cursor.fetchone()
-            
-            return {
-                "total_requests": total_requests,
-                "items_count": items_count,
-                "member_since": created_at
-            }
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "total_tryons": row,
+                    "member_since": row
+                }
+            return {"total_tryons": 0, "member_since": None}

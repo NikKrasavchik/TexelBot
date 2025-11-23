@@ -1,14 +1,12 @@
-# Виртуальное окружение
 venv/
 env/
 __pycache__/
 *.pyc
-
-# Конфиденциальные данные
 .env
 *.db
-
-# IDE
+temp_images/
 .vscode/
 .idea/
 *.swp
+*.jpg
+*.png

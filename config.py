@@ -1,5 +1,5 @@
 """
-Конфигурация для Creative Items Bot
+Конфигурация для Texel Try-On Bot
 """
 import os
 from dataclasses import dataclass
@@ -13,24 +13,16 @@ class BotConfig:
     # Telegram
     TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "YOUR_BOT_TOKEN_HERE")
     
-    # Ollama настройки
-    AI_MODEL: str = os.getenv("AI_MODEL", "llama3.2")
-    AI_BASE_URL: str = os.getenv("AI_BASE_URL", "http://localhost:11434/v1")
+    # RapidAPI (Texel)
+    RAPIDAPI_KEY: str = os.getenv("RAPIDAPI_KEY", "YOUR_RAPIDAPI_KEY_HERE")
     
     # Настройки базы данных
-    DATABASE_NAME: str = "creative_bot.db"
-    
-    # Настройки AI
-    AI_TEMPERATURE: float = 0.85
-    MAX_TOKENS: int = 800
+    DATABASE_NAME: str = "texel_bot.db"
     
     # Лимиты
-    MAX_ITEMS_PER_USER: int = 20
-    MAX_IDEAS_PER_REQUEST: int = 7
-    MIN_ITEMS_FOR_IDEAS: int = 2
+    MAX_REQUESTS_PER_DAY: int = 50
     
-    # Антиспам
-    COOLDOWN_SECONDS: int = 3
-    MAX_REQUESTS_PER_MINUTE: int = 10
+    # Путь для временных файлов
+    TEMP_DIR: str = "temp_images"
 
 config = BotConfig()
