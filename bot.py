@@ -11,6 +11,7 @@ from telegram.ext import (
 from config import config
 from database import DatabaseManager
 from tryon_engine import TryOnEngine
+from ai_engine import AIEngine
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Инициализация
 db = DatabaseManager(config.DATABASE_NAME)
 tryon_engine = TryOnEngine(config.RAPIDAPI_KEY)
+ai_engine = AIEngine()
 
 # Создаём папку для временных файлов
 os.makedirs(config.TEMP_DIR, exist_ok=True)
@@ -32,6 +34,7 @@ class TexelBot:
     def __init__(self):
         self.db = db
         self.tryon = tryon_engine
+        self.ai = ai_engine
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /start"""
@@ -44,16 +47,19 @@ class TexelBot:
             f"👋 Привет, {user.first_name}!\n\n"
             "Я — **Texel Try-On Bot** 🤖👔\n\n"
             "🔮 Что я умею:\n"
-            "• Виртуальная примерка одежды\n"
-            "• AI-генерация образов\n"
-            "• Мгновенный результат\n\n"
-            "📸 Как использовать:\n"
+            "• Виртуальная примерка одежды (/tryon)\n"
+            "• Генерация идей из предметов (/items + /ideas)\n\n"
+            "📸 Как использовать примерку:\n"
             "1️⃣ Нажми /tryon\n"
             "2️⃣ Отправь фото человека\n"
             "3️⃣ Отправь фото одежды\n"
             "4️⃣ Получи результат!\n\n"
+            "🧩 Как использовать идеи:\n"
+            "1️⃣ Нажми /items и отправь список вещей\n"
+            "2️⃣ Нажми /ideas — получишь варианты, что можно сделать\n\n"
             "Попробуй прямо сейчас! 👇"
         )
+
         
         keyboard = [
             [InlineKeyboardButton("👔 Начать примерку", callback_data="start_tryon")],
@@ -308,9 +314,104 @@ class TexelBot:
                 )
         except Exception as e:
             logger.error(f"Error in error handler: {e}")
+    
+    async def add_items_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда /items — начать ввод предметов"""
+        await update.message.reply_text(
+            "🧩 Отправь список предметов (через запятую или с новой строки).\n\n"
+            "Пример:\n"
+            "молоток, гвозди, доски, краска"
+        )
+        context.user_data["awaiting_items_text"] = True
+
+    async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка текстовых сообщений (режим предметов)"""
+        user_id = update.effective_user.id
+        text = (update.message.text or "").strip()
+
+        # Если ждём ввод предметов
+        if context.user_data.get("awaiting_items_text"):
+            parts = []
+            for line in text.split("\n"):
+                parts.extend(line.split(","))
+            items = [p.strip() for p in parts if p.strip()]
+
+            if not items:
+                await update.message.reply_text("Не нашёл ни одного предмета. Попробуй ещё раз.")
+                return
+
+            for item in items:
+                self.db.add_item(user_id, item)
+
+            user_items = self.db.get_user_items(user_id)
+            items_list = "\n".join(f"• {it}" for it in user_items)
+
+            context.user_data["awaiting_items_text"] = False
+
+            await update.message.reply_text(
+                f"✅ Добавлено предметов: {len(items)}\n\n"
+                f"📦 Всего предметов: {len(user_items)}\n\n"
+                f"Твой список:\n{items_list}\n\n"
+                "Теперь напиши /ideas, чтобы получить идеи."
+            )
+            return
+
+        # Прочий текст — подсказка
+        await update.message.reply_text(
+            "Я тебя понял, но не знаю, что с этим сделать.\n\n"
+            "Полезные команды:\n"
+            "/items — добавить предметы\n"
+            "/ideas — сгенерировать идеи\n"
+            "/clearitems — очистить список\n"
+            "/tryon — виртуальная примерка"
+        )
+
+    async def ideas_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда /ideas — сгенерировать идеи из предметов"""
+        user_id = update.effective_user.id
+        items = self.db.get_user_items(user_id)
+
+        if len(items) < 2:
+            await update.message.reply_text(
+                "Нужно минимум 2 предмета для генерации идей.\n"
+                "Добавь их через /items."
+            )
+            return
+
+        await update.message.reply_text(
+            "🧠 Генерирую идеи из твоих предметов...\n"
+            "Это может занять несколько секунд."
+        )
+
+        result = self.ai.generate_creative_ideas(items, count=5)
+
+        if result.get("success"):
+            await update.message.reply_text(result["ideas"])
+        else:
+            # Мягкий fallback, без пугающей ошибки
+            fallback = result.get("fallback_ideas")
+            if fallback:
+                await update.message.reply_text(
+                    "⚠️ Основной ИИ сейчас недоступен, показываю базовые идеи:\n\n"
+                    + fallback
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Не удалось сгенерировать идеи.\nПопробуй ещё раз позже."
+                )
+
+
+    async def clear_items_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда /clearitems — очистить список предметов"""
+        user_id = update.effective_user.id
+        self.db.clear_items(user_id)
+        await update.message.reply_text("🗑️ Список предметов очищен.")
+
 
 
 def main():
+    print("DEBUG TELEGRAM_TOKEN raw:", os.getenv("TELEGRAM_TOKEN"))
+    print("DEBUG config.TELEGRAM_TOKEN:", config.TELEGRAM_TOKEN)
     """Запуск бота"""
     if config.TELEGRAM_TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("❌ ОШИБКА: Установите TELEGRAM_TOKEN в .env!")
@@ -333,6 +434,14 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.button_callback))
     application.add_handler(MessageHandler(filters.PHOTO, bot.handle_photo))
     application.add_error_handler(bot.error_handler)
+
+    application.add_handler(CommandHandler("items", bot.add_items_command))
+    application.add_handler(CommandHandler("ideas", bot.ideas_command))
+    application.add_handler(CommandHandler("clearitems", bot.clear_items_command))
+
+    # Обработка ТЕКСТОВЫХ сообщений (после команд и callback’ов)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_text))
+
     
     print("✅ Бот запущен! Нажми Ctrl+C для остановки.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

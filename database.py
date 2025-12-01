@@ -69,6 +69,17 @@ class DatabaseManager:
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
             """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    item_name TEXT NOT NULL,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_deleted BOOLEAN DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                )
+            """)
             
             conn.commit()
     
@@ -143,3 +154,34 @@ class DatabaseManager:
                     "member_since": row
                 }
             return {"total_tryons": 0, "member_since": None}
+
+    def add_item(self, user_id: int, item_name: str) -> None:
+        """Добавить один предмет пользователю"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO user_items (user_id, item_name)
+                VALUES (?, ?)
+            """, (user_id, item_name.strip().lower()))
+
+    def get_user_items(self, user_id: int):
+        """Получить список активных предметов пользователя"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT item_name FROM user_items
+                WHERE user_id = ? AND is_deleted = 0
+                ORDER BY added_at ASC
+            """, (user_id,))
+            return [row["item_name"] for row in cursor.fetchall()]
+
+    def clear_items(self, user_id: int) -> None:
+        """Мягко очистить предметы пользователя"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE user_items
+                SET is_deleted = 1
+                WHERE user_id = ?
+            """, (user_id,))
+

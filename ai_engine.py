@@ -1,49 +1,54 @@
 """
-AI движок для работы с Ollama (OpenAI-совместимый API)
+AI движок для работы с локальным Ollama (без OpenAI-клиента)
 """
 import logging
 from typing import List, Dict
-from openai import OpenAI
+
+import requests
+
 from config import config
 
 logger = logging.getLogger("ai_engine")
 
+
 class AIEngine:
-    """Движок для работы с Ollama"""
+    """Движок для генерации креативных идей через Ollama"""
 
     def __init__(self):
-        """Инициализация клиента Ollama"""
-        self.client = OpenAI(
-            base_url=config.AI_BASE_URL,
-            api_key="ollama"  # Для Ollama ключ не нужен, но библиотека требует этот параметр
-        )
+        # Берём базовый URL и модель из конфига
+        self.base_url = config.AI_BASE_URL  # ожидаем http://localhost:11434 или http://localhost:11434/api
         self.model = config.AI_MODEL
         self.temperature = config.AI_TEMPERATURE
         self.max_tokens = config.MAX_TOKENS
 
+        # Нормализуем base_url до вида http://localhost:11434 (без /v1)
+        if self.base_url.endswith("/v1"):
+            self.base_url = self.base_url[:-3]
+        if self.base_url.endswith("/"):
+            self.base_url = self.base_url[:-1]
+
+        self.chat_url = f"{self.base_url}/api/chat"
+
     def generate_creative_ideas(self, items: List[str], count: int = 5) -> Dict:
         """
-        Генерация креативных идей через Ollama
+        Генерация креативных идей через Ollama /api/chat
 
         Args:
             items: список предметов
             count: количество идей
-        
-        Returns:
-            Dict с идеями и метаданными
         """
         try:
             items_str = ", ".join(items)
-            prompt = f"""Пользователь предоставил следующие предметы: {items_str}
+            prompt = f"""Пользователь предоставил следующие предметы: {items_str}.
 
 Твоя задача — предложить {count} УНИКАЛЬНЫХ и ПРАКТИЧНЫХ идей того, что можно создать из этих предметов.
 
 Требования к идеям:
-1. Каждая идея должна быть РЕАЛЬНО выполнимой
-2. Укажи уровень сложности (🟢 Легко / 🟡 Средне / 🔴 Сложно)
-3. Добавь эмодзи для визуализации
-4. Кратко опиши процесс (1-2 предложения)
-5. Укажи примерное время создания
+1. Каждая идея должна быть РЕАЛЬНО выполнимой.
+2. Укажи уровень сложности (🟢 Легко / 🟡 Средне / 🔴 Сложно).
+3. Добавь эмодзи для визуализации.
+4. Кратко опиши процесс (1-2 предложения).
+5. Укажи примерное время создания.
 
 Формат ответа:
 
@@ -54,9 +59,9 @@ class AIEngine:
 
 Будь креативным, но реалистичным!"""
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
+            payload = {
+                "model": self.model,
+                "messages": [
                     {
                         "role": "system",
                         "content": "Ты — эксперт по DIY-проектам с 15-летним опытом. "
@@ -67,25 +72,36 @@ class AIEngine:
                         "content": prompt
                     }
                 ],
-                temperature=self.temperature,
-                max_tokens=self.max_tokens
-            )
+                "options": {
+                    "temperature": self.temperature,
+                    "num_predict": self.max_tokens,
+                },
+                "stream": False,
+            }
 
-            # Универсальный разбор ответа Ollama/OpenAI API
-            choice = response.choices[0]
-            if hasattr(choice, "message"):
-                ideas_text = choice.message.content
-            elif hasattr(choice, "text"):
-                ideas_text = choice.text
+            resp = requests.post(self.chat_url, json=payload, timeout=120)
+            if resp.status_code != 200:
+                logger.error(f"Ollama API error {resp.status_code}: {resp.text[:200]!r}")
+                return {
+                    "success": False,
+                    "error": f"Ollama API error {resp.status_code}",
+                    "fallback_ideas": self._generate_fallback_ideas(items),
+                }
+
+            data = resp.json()
+            # Формат ответа Ollama /api/chat: {"message": {"role": "...", "content": "..."}, ...}
+            if "message" in data and "content" in data["message"]:
+                ideas_text = data["message"]["content"]
             else:
-                ideas_text = str(choice)
+                # На всякий случай
+                ideas_text = str(data)
 
             return {
                 "success": True,
                 "ideas": ideas_text,
                 "items_used": items,
                 "model": self.model,
-                "provider": "ollama"
+                "provider": "ollama",
             }
 
         except Exception as e:
@@ -93,7 +109,7 @@ class AIEngine:
             return {
                 "success": False,
                 "error": str(e),
-                "fallback_ideas": self._generate_fallback_ideas(items)
+                "fallback_ideas": self._generate_fallback_ideas(items),
             }
 
     def _generate_fallback_ideas(self, items: List[str]) -> str:
