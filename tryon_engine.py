@@ -16,7 +16,7 @@ class TryOnEngine:
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("RAPIDAPI_KEY")
-        self.api_url = "https://try-on-diffusion.p.rapidapi.com/v1/virtual-tryon"
+        self.api_url = "https://try-on-diffusion.p.rapidapi.com/try-on-file"
         self.headers = {
             "X-RapidAPI-Key": self.api_key,
             "X-RapidAPI-Host": "try-on-diffusion.p.rapidapi.com",
@@ -79,29 +79,38 @@ class TryOnEngine:
             )
             
             if response.status_code == 200:
-                result = response.json()
-                
-                if "output_image" in result:
-                    output_path = "tryon_result.jpg"
-                    self._save_base64_image(result["output_image"], output_path)
-                    
-                    return {
-                        "success": True,
-                        "output_path": output_path,
-                        "message": "Примерка успешно создана!"
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": "Нет выходного изображения в ответе API"
-                    }
+                # Сначала пробуем как JSON
+                try:
+                    result = response.json()
+                    if "output_image" in result:
+                        output_path = "tryon_result.jpg"
+                        self._save_base64_image(result["output_image"], output_path)
+                        return {
+                            "success": True,
+                            "output_path": output_path,
+                            "message": "Примерка успешно создана!"
+                        }
+                except ValueError:
+                    # Это не JSON, пробуем как обычное изображение
+                    pass
+
+                # Если не получилось как JSON — считаем, что вернули напрямую картинку
+                output_path = "tryon_result.jpg"
+                with open(output_path, "wb") as f:
+                    f.write(response.content)
+
+                return {
+                    "success": True,
+                    "output_path": output_path,
+                    "message": "Примерка успешно создана!"
+                }
             else:
-                error_msg = f"API вернул код {response.status_code}"
-                logger.error(f"{error_msg}: {response.text}")
+                logger.error(f"API вернул код {response.status_code}: {response.text[:200]!r}")
                 return {
                     "success": False,
-                    "error": error_msg
+                    "error": f"API вернул код {response.status_code}"
                 }
+
                 
         except requests.exceptions.Timeout:
             return {

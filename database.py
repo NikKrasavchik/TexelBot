@@ -102,29 +102,30 @@ class DatabaseManager:
                 WHERE user_id = ?
             """, (user_id,))
     
-    def check_rate_limit(self, user_id: int, window_hours: int = 24, 
+    def check_rate_limit(self, user_id: int, window_hours: int = 24,
                         max_actions: int = 50) -> Tuple[bool, int]:
         """Проверка лимита запросов"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cutoff_time = datetime.now() - timedelta(hours=window_hours)
-            
             cursor.execute("""
                 SELECT COUNT(*) FROM user_actions
                 WHERE user_id = ? AND timestamp > ?
             """, (user_id, cutoff_time))
-            
-            count = cursor.fetchone()
+            row = cursor.fetchone()
+            count = row[0] if row else 0          # <- достаём число
+
             remaining = max(0, max_actions - count)
-            
+
             if count < max_actions:
                 cursor.execute("""
                     INSERT INTO user_actions (user_id, action_type)
                     VALUES (?, 'tryon_request')
                 """, (user_id,))
                 return True, remaining
-            
+
             return False, 0
+
     
     def get_user_stats(self, user_id: int) -> Dict:
         """Получение статистики пользователя"""
